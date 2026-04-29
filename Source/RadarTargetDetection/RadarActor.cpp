@@ -1,5 +1,6 @@
 #include "RadarActor.h"
 #include "TargetActor.h"
+#include "HostileFocusIndicator.h"
 
 #include "Engine/World.h"
 #include "Engine/Engine.h"
@@ -11,6 +12,10 @@
 ARadarActor::ARadarActor()
 {
     PrimaryActorTick.bCanEverTick = true;
+
+    FocusIndicator = nullptr;
+    CurrentFocusedHostileTarget = nullptr;
+    bEnableHostileFocus = true;
 
     ScanRadius = 1500.0f;
     ScanInterval = 0.1f;
@@ -28,6 +33,8 @@ ARadarActor::ARadarActor()
     HostileAlarmSound = nullptr;
     bEnableHostileAlarm = true;
     LastAlarmTime = -999.0f;
+
+    NextTrackNumber = 1;
 }
 
 void ARadarActor::BeginPlay()
@@ -64,6 +71,10 @@ void ARadarActor::ScanForTargets()
     TSet<ATargetActor*> CurrentDetectedTargets;
 
     int32 DetectedCount = 0;
+    CurrentContacts.Empty();
+
+    ATargetActor* BestHostileTarget = nullptr;
+    float BestHostileDistance = TNumericLimits<float>::Max();
 
     if (bDrawDebugSphere)
     {
@@ -103,11 +114,24 @@ void ARadarActor::ScanForTargets()
 
             const FString TargetTypeText = ConvertTargetTypeToString(Target);
             const FString ThreatLevel = CalculateThreatLevel(Target, Distance);
+            const float TargetSpeed = CalculateTargetSpeed(Target, ScanInterval);
+            const FString TrackId = GetOrCreateTrackId(Target);
+
+            FRadarContactInfo ContactInfo;
+            ContactInfo.TrackId = TrackId;
+            ContactInfo.TargetId = Target->TargetId;
+            ContactInfo.TargetType = TargetTypeText;
+            ContactInfo.Distance = Distance;
+            ContactInfo.Speed = TargetSpeed;
+            ContactInfo.ThreatLevel = ThreatLevel;
+
+            CurrentContacts.Add(ContactInfo);
 
             if (!PreviouslyDetectedTargets.Contains(Target))
             {
                 const FString EnteredMessage = FString::Printf(
-                    TEXT("TARGET ENTERED RADAR RANGE: %s"),
+                    TEXT("TARGET ENTERED RADAR RANGE: %s / %s"),
+                    *TrackId,
                     *Target->TargetId
                 );
 
@@ -120,10 +144,12 @@ void ARadarActor::ScanForTargets()
             }
 
             const FString TrackingMessage = FString::Printf(
-                TEXT("TRACKING: %s | Type: %s | Distance: %.1f cm | Threat: %s"),
+                TEXT("TRACKING: %s | %s | Type: %s | Distance: %.1f cm | Speed: %.1f cm/s | Threat: %s"),
+                *TrackId,
                 *Target->TargetId,
                 *TargetTypeText,
                 Distance,
+                TargetSpeed,
                 *ThreatLevel
             );
 
@@ -136,8 +162,15 @@ void ARadarActor::ScanForTargets()
 
             if (Target->TargetType == ETargetType::Hostile)
             {
+                if (Distance < BestHostileDistance)
+                {
+                    BestHostileDistance = Distance;
+                    BestHostileTarget = Target;
+                }
+
                 const FString WarningMessage = FString::Printf(
-                    TEXT("WARNING: HOSTILE TARGET DETECTED -> %s | Threat: %s"),
+                    TEXT("WARNING: HOSTILE TARGET DETECTED -> %s / %s | Threat: %s"),
+                    *TrackId,
                     *Target->TargetId,
                     *ThreatLevel
                 );
@@ -187,8 +220,13 @@ void ARadarActor::ScanForTargets()
         {
             if (IsValid(PreviousTarget))
             {
+                const FString LostTrackId = TargetTrackIds.Contains(PreviousTarget)
+                    ? TargetTrackIds[PreviousTarget]
+                    : TEXT("TRK-???");
+
                 const FString LostMessage = FString::Printf(
-                    TEXT("TARGET LOST: %s"),
+                    TEXT("TARGET LOST: %s / %s"),
+                    *LostTrackId,
                     *PreviousTarget->TargetId
                 );
 
@@ -199,9 +237,44 @@ void ARadarActor::ScanForTargets()
                     LostMessage
                 );
             }
+
+            PreviousTargetLocations.Remove(PreviousTarget);
         }
     }
 
+    if (BestHostileTarget)
+    {
+        CurrentFocusedHostileTarget = BestHostileTarget;
+    }
+
+    if (CurrentFocusedHostileTarget)
+    {
+        const bool bFocusedTargetIsInvalid =
+            !IsValid(CurrentFocusedHostileTarget) ||
+            !CurrentFocusedHostileTarget->bIsActiveTarget ||
+            CurrentFocusedHostileTarget->TargetType != ETargetType::Hostile;
+
+        if (bFocusedTargetIsInvalid)
+        {
+            CurrentFocusedHostileTarget = nullptr;
+        }
+        else
+        {
+            const float FocusedTargetDistance = FVector::Dist(
+                GetActorLocation(),
+                CurrentFocusedHostileTarget->GetActorLocation()
+            );
+
+            if (FocusedTargetDistance > ScanRadius)
+            {
+                CurrentFocusedHostileTarget = nullptr;
+            }
+        }
+    }
+
+    UpdateHostileFocusIndicator(CurrentFocusedHostileTarget);
+
+    PreviouslyDetectedTargets = CurrentDetectedTargets;
     PreviouslyDetectedTargets = CurrentDetectedTargets;
 
     const FString SummaryMessage = FString::Printf(
@@ -409,4 +482,68 @@ bool ARadarActor::IsTargetInsideSweepAngle(const ATargetActor* Target) const
     const float AngleDegrees = FMath::RadiansToDegrees(AngleRadians);
 
     return AngleDegrees <= SweepAngleDegrees;
+}
+
+float ARadarActor::CalculateTargetSpeed(ATargetActor* Target, float DeltaTime)
+{
+    if (!Target || DeltaTime <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const FVector CurrentLocation = Target->GetActorLocation();
+
+    if (!PreviousTargetLocations.Contains(Target))
+    {
+        PreviousTargetLocations.Add(Target, CurrentLocation);
+        return 0.0f;
+    }
+
+    const FVector PreviousLocation = PreviousTargetLocations[Target];
+    const float DistanceMoved = FVector::Dist(CurrentLocation, PreviousLocation);
+    const float Speed = DistanceMoved / DeltaTime;
+
+    PreviousTargetLocations[Target] = CurrentLocation;
+
+    return Speed;
+}
+
+void ARadarActor::UpdateHostileFocusIndicator(ATargetActor* FocusTarget)
+{
+    if (!bEnableHostileFocus || !FocusIndicator)
+    {
+        return;
+    }
+
+    if (FocusTarget)
+    {
+        FocusIndicator->SetFocusedTarget(FocusTarget);
+    }
+    else
+    {
+        FocusIndicator->ClearFocusedTarget();
+    }
+}
+
+FString ARadarActor::GetOrCreateTrackId(ATargetActor* Target)
+{
+    if (!Target)
+    {
+        return TEXT("TRK-???");
+    }
+
+    if (TargetTrackIds.Contains(Target))
+    {
+        return TargetTrackIds[Target];
+    }
+
+    const FString NewTrackId = FString::Printf(
+        TEXT("TRK-%03d"),
+        NextTrackNumber
+    );
+
+    TargetTrackIds.Add(Target, NewTrackId);
+    NextTrackNumber++;
+
+    return NewTrackId;
 }
