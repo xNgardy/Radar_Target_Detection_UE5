@@ -91,6 +91,21 @@ void ARadarActor::ScanForTargets()
                 Message
             );
 
+            if (Target->TargetType == ETargetType::Hostile)
+            {
+                const FString WarningMessage = FString::Printf(
+                    TEXT("WARNING: HOSTILE TARGET DETECTED -> %s"),
+                    *Target->TargetId
+                );
+
+                GEngine->AddOnScreenDebugMessage(
+                    -1,
+                    ScanInterval,
+                    FColor::Red,
+                    WarningMessage
+                );
+            }
+
             DrawDebugLine(
                 GetWorld(),
                 GetActorLocation(),

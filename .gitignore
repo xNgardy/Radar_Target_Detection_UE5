@@ -21,6 +21,11 @@ Builds/
 *.sdf
 *.rsuser
 
+# Unreal generated files
+*.target
+*.modules
+*.version
+
 # Compiled files
 *.obj
 *.pdb

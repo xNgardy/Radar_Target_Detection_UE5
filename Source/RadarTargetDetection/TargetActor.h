@@ -22,6 +22,8 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaTime) override;
+
 
 public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Target")
@@ -32,4 +34,20 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Target")
     bool bIsActiveTarget;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
+    bool bCanMove;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
+    float MovementSpeed;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
+    float MovementRange;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
+    FVector MovementDirection;
+
+private:
+    FVector StartLocation;
+    float MovementTime;
 };
